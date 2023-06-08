@@ -30,12 +30,20 @@ type MyResourceSpec struct {
 
 	// Foo is an example field of MyResource. Edit myresource_types.go to remove/update
 	Foo string `json:"foo,omitempty"`
+
+	// MyResourceName is Resource Name
+	MyResourceName string `json:"myResourceName,omitempty"`
 }
 
 // MyResourceStatus defines the observed state of MyResource
 type MyResourceStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+
+	// My Resource ready status
+	MyResourceReady string `json:"myResourceReady,omitempty"`
+
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 }
 
 //+kubebuilder:object:root=true
