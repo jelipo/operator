@@ -17,6 +17,8 @@ limitations under the License.
 package v1
 
 import (
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -31,8 +33,11 @@ type MyResourceSpec struct {
 	// Foo is an example field of MyResource. Edit myresource_types.go to remove/update
 	Foo string `json:"foo,omitempty"`
 
-	// MyResourceName is Resource Name
-	MyResourceName string `json:"myResourceName,omitempty"`
+	Size      *int32                      `json:"size"`
+	Image     string                      `json:"image"`
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+	Envs      []corev1.EnvVar             `json:"envs,omitempty"`
+	Ports     []corev1.ServicePort        `json:"ports,omitempty"`
 }
 
 // MyResourceStatus defines the observed state of MyResource
@@ -40,10 +45,10 @@ type MyResourceStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// My Resource ready status
-	MyResourceReady string `json:"myResourceReady,omitempty"`
-
-	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
+	appsv1.DeploymentStatus `json:",inline"` // Deployment 的状态
+	ServiceIp               string           `json:"serviceIp"`          // 服务的IP
+	Port                    *int             `json:"port"`               // 端口号
+	NodePort                *int             `json:"nodePort,omitempty"` // NodePort的端口号
 }
 
 //+kubebuilder:object:root=true

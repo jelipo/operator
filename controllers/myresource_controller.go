@@ -18,11 +18,17 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	myoperatorv1 "github.com/jelipo/operator/api/v1"
 )
@@ -47,7 +53,91 @@ type MyResourceReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.14.1/pkg/reconcile
 func (r *MyResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	log := log.FromContext(ctx)
+
+	log.Info("run reconcile")
+
+	// Fetch the AppService instance
+	instance := &myoperatorv1.MyResource{}
+	err := r.Client.Get(context.TODO(), req.NamespacedName, instance)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// Request object not found, could have been deleted after reconcile request.
+			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
+			// Return and don't requeue
+			return reconcile.Result{}, nil
+		}
+		// Error reading the object - requeue the request.
+		return reconcile.Result{}, err
+	}
+
+	if instance.DeletionTimestamp != nil {
+		return reconcile.Result{}, err
+	}
+
+	// 如果不存在，则创建关联资源
+	// 如果存在，判断是否需要更新
+	//   如果需要更新，则直接更新
+	//   如果不需要更新，则正常返回
+
+	deploy := &appsv1.Deployment{}
+	if err := r.Client.Get(context.TODO(), req.NamespacedName, deploy); err != nil && errors.IsNotFound(err) {
+		// 创建关联资源
+		// 1. 创建 Deploy
+		deploy := resources.NewDeploy(instance)
+		if err := r.Client.Create(context.TODO(), deploy); err != nil {
+			return reconcile.Result{}, err
+		}
+		// 2. 创建 Service
+		service := resources.NewService(instance)
+		if err := r.Client.Create(context.TODO(), service); err != nil {
+			return reconcile.Result{}, err
+		}
+		// 3. 关联 Annotations
+		data, _ := json.Marshal(instance.Spec)
+		if instance.Annotations != nil {
+			instance.Annotations["spec"] = string(data)
+		} else {
+			instance.Annotations = map[string]string{"spec": string(data)}
+		}
+
+		if err := r.Client.Update(context.TODO(), instance); err != nil {
+			return reconcile.Result{}, nil
+		}
+		return reconcile.Result{}, nil
+	}
+
+	oldspec := myoperatorv1.MyResourceSpec{}
+	if err := json.Unmarshal([]byte(instance.Annotations["spec"]), oldspec); err != nil {
+		return reconcile.Result{}, err
+	}
+
+	if !reflect.DeepEqual(instance.Spec, oldspec) {
+		// 更新关联资源
+		newDeploy := resources.NewDeploy(instance)
+		oldDeploy := &appsv1.Deployment{}
+		if err := r.Client.Get(context.TODO(), request.NamespacedName, oldDeploy); err != nil {
+			return reconcile.Result{}, err
+		}
+		oldDeploy.Spec = newDeploy.Spec
+		if err := r.Client.Update(context.TODO(), oldDeploy); err != nil {
+			return reconcile.Result{}, err
+		}
+
+		newService := resources.NewService(instance)
+		oldService := &corev1.Service{}
+		if err := r.Client.Get(context.TODO(), request.NamespacedName, oldService); err != nil {
+			return reconcile.Result{}, err
+		}
+		oldService.Spec = newService.Spec
+		if err := r.Client.Update(context.TODO(), oldService); err != nil {
+			return reconcile.Result{}, err
+		}
+
+		return reconcile.Result{}, nil
+	}
+
+	return reconcile.Result{}, nil
 
 	// TODO(user): your logic here
 
