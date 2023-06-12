@@ -24,7 +24,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -84,12 +86,12 @@ func (r *MyResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.Client.Get(context.TODO(), req.NamespacedName, deploy); err != nil && errors.IsNotFound(err) {
 		// 创建关联资源
 		// 1. 创建 Deploy
-		deploy := resources.NewDeploy(instance)
+		deploy := NewDeploy(instance)
 		if err := r.Client.Create(context.TODO(), deploy); err != nil {
 			return reconcile.Result{}, err
 		}
 		// 2. 创建 Service
-		service := resources.NewService(instance)
+		service := NewService(instance)
 		if err := r.Client.Create(context.TODO(), service); err != nil {
 			return reconcile.Result{}, err
 		}
@@ -114,9 +116,9 @@ func (r *MyResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	if !reflect.DeepEqual(instance.Spec, oldspec) {
 		// 更新关联资源
-		newDeploy := resources.NewDeploy(instance)
+		newDeploy := NewDeploy(instance)
 		oldDeploy := &appsv1.Deployment{}
-		if err := r.Client.Get(context.TODO(), request.NamespacedName, oldDeploy); err != nil {
+		if err := r.Client.Get(context.TODO(), req.NamespacedName, oldDeploy); err != nil {
 			return reconcile.Result{}, err
 		}
 		oldDeploy.Spec = newDeploy.Spec
@@ -124,9 +126,9 @@ func (r *MyResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return reconcile.Result{}, err
 		}
 
-		newService := resources.NewService(instance)
+		newService := NewService(instance)
 		oldService := &corev1.Service{}
-		if err := r.Client.Get(context.TODO(), request.NamespacedName, oldService); err != nil {
+		if err := r.Client.Get(context.TODO(), req.NamespacedName, oldService); err != nil {
 			return reconcile.Result{}, err
 		}
 		oldService.Spec = newService.Spec
@@ -138,15 +140,93 @@ func (r *MyResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	return reconcile.Result{}, nil
-
-	// TODO(user): your logic here
-
-	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MyResourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&myoperatorv1.MyResource{}).
+		Owns(&appsv1.Deployment{}).
 		Complete(r)
+}
+
+func NewDeploy(app *myoperatorv1.MyResource) *appsv1.Deployment {
+	labels := map[string]string{"app": app.Name}
+	selector := &metav1.LabelSelector{MatchLabels: labels}
+	return &appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      app.Name,
+			Namespace: app.Namespace,
+
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(app, schema.GroupVersionKind{
+					Group:   corev1.SchemeGroupVersion.Group,
+					Version: corev1.SchemeGroupVersion.Version,
+					Kind:    "MyResource",
+				}),
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: app.Spec.Size,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: corev1.PodSpec{
+					Containers: newContainers(app),
+				},
+			},
+			Selector: selector,
+		},
+	}
+}
+
+func newContainers(app *myoperatorv1.MyResource) []corev1.Container {
+	var containerPorts []corev1.ContainerPort
+	for _, svcPort := range app.Spec.Ports {
+		cport := corev1.ContainerPort{}
+		cport.ContainerPort = svcPort.TargetPort.IntVal
+		containerPorts = append(containerPorts, cport)
+	}
+	return []corev1.Container{
+		{
+			Name:            app.Name,
+			Image:           app.Spec.Image,
+			Resources:       app.Spec.Resources,
+			Ports:           containerPorts,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Env:             app.Spec.Envs,
+		},
+	}
+}
+
+func NewService(app *myoperatorv1.MyResource) *corev1.Service {
+	return &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Service",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      app.Name,
+			Namespace: app.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(app, schema.GroupVersionKind{
+					Group:   corev1.SchemeGroupVersion.Group,
+					Version: corev1.SchemeGroupVersion.Version,
+					Kind:    "AppService",
+				}),
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:  corev1.ServiceTypeNodePort,
+			Ports: app.Spec.Ports,
+			Selector: map[string]string{
+				"app": app.Name,
+			},
+		},
+	}
 }
